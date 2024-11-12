@@ -5,8 +5,9 @@ import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 from sklearn.tree import DecisionTreeRegressor
-from sklearn.metrics import mean_squared_error
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
@@ -59,17 +60,11 @@ if uploaded_file:
             data_cleaned = data[x_column].dropna()
             category_counts = data_cleaned.value_counts()
 
-            # Unique values in the column
-            unique_values = len(category_counts)
-
             # Check if the column has more than 2 unique values
-            if unique_values > 2:
+            if len(category_counts) > 2:
                 # Top N categories
                 top_n = st.slider(
-                    "Select Top N Categories",
-                    min_value=2,
-                    max_value=unique_values,
-                    value=5 if unique_values > 10 else int(unique_values / 2),
+                    "Select Top N Categories", min_value=2, max_value=10, value=5
                 )
 
                 # Select only the top N categories
@@ -123,8 +118,10 @@ if uploaded_file:
     # --- Basic Prediction Model ---
     st.header("Basic Prediction Model")
     model_type = st.selectbox(
-        "Select Model Type", ["Linear Regression", "Decision Tree"]
+        "Select Model Type", ["Linear Regression", "Decision Tree", "Random Forest"]
     )
+
+    # Select numeric columns for features and target
     numeric_columns = data.select_dtypes(include=["number"]).columns.tolist()
     features = st.multiselect(
         "Select Feature Columns (Numeric)", options=numeric_columns
@@ -132,60 +129,98 @@ if uploaded_file:
     target = st.selectbox("Select Target Column", options=numeric_columns)
 
     if features and target:
+        # Drop rows where target is NaN
         data = data.dropna(subset=[target])
+
+        # Ensure the feature columns are selected
         X = data[features]
         y = data[target]
 
-        if len(X) > 1:
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=0.2, random_state=42
-            )
-            model = (
-                LinearRegression()
-                if model_type == "Linear Regression"
-                else DecisionTreeRegressor()
-            )
+        # Apply scaling to numerical features
+        numeric_features = X.select_dtypes(include=["number"]).columns.tolist()
 
-            numeric_transformer = SimpleImputer(strategy="mean")
-            categorical_columns = (
-                data.select_dtypes(exclude=["number"])
-                .columns.intersection(features)
-                .tolist()
+        # Handle missing values for both numerical and categorical features
+        numeric_transformer = Pipeline(
+            steps=[
+                (
+                    "imputer",
+                    SimpleImputer(strategy="mean"),
+                ),
+                ("scaler", StandardScaler()),  # Scale the features
+            ]
+        )
+
+        categorical_columns = X.select_dtypes(exclude=["number"]).columns.tolist()
+        categorical_transformer = Pipeline(
+            steps=[
+                (
+                    "imputer",
+                    SimpleImputer(strategy="constant", fill_value="missing"),
+                ),
+                (
+                    "onehot",
+                    OneHotEncoder(handle_unknown="ignore"),
+                ),  # One-hot encode categorical variables
+            ]
+        )
+
+        # Apply transformations to the features
+        preprocessor = ColumnTransformer(
+            transformers=[
+                ("num", numeric_transformer, numeric_features),
+                ("cat", categorical_transformer, categorical_columns),
+            ],
+            remainder="drop",
+        )
+
+        # Select model type based on user input
+        if model_type == "Linear Regression":
+            model = LinearRegression()
+        elif model_type == "Decision Tree":
+            model = DecisionTreeRegressor(random_state=42)
+        elif model_type == "Random Forest":
+            model = RandomForestRegressor(random_state=42)
+
+        # Create a pipeline to chain preprocessing and model fitting
+        model_pipeline = Pipeline(
+            steps=[("preprocessor", preprocessor), ("model", model)]
+        )
+
+        # Split the data into training and test sets
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42
+        )
+
+        # Fit the model
+        model_pipeline.fit(X_train, y_train)
+
+        # Predict on the test set
+        y_pred = model_pipeline.predict(X_test)
+
+        # Calculate evaluation metrics
+        mse = mean_squared_error(y_test, y_pred)
+        r2 = r2_score(y_test, y_pred)
+
+        # Display error metrics
+        st.write(f"Model Type: {model_type}")
+        st.write(f"Mean Squared Error (MSE): {mse}")
+        st.write(f"R-squared (R²): {r2}")
+
+        # Prediction Interface
+        st.subheader("Make Predictions")
+        user_input = {
+            col: st.number_input(
+                f"Enter {col} value", float(X[col].min()), float(X[col].max())
             )
-            categorical_transformer = OneHotEncoder(handle_unknown="ignore")
+            for col in features
+        }
+        user_input_df = pd.DataFrame([user_input])
 
-            preprocessor = ColumnTransformer(
-                transformers=[
-                    ("num", numeric_transformer, features),
-                    ("cat", categorical_transformer, categorical_columns),
-                ],
-                remainder="drop",
-            )
-
-            model_pipeline = Pipeline(
-                steps=[("preprocessor", preprocessor), ("model", model)]
-            )
-            model_pipeline.fit(X_train, y_train)
-            y_pred = model_pipeline.predict(X_test)
-            mse = mean_squared_error(y_test, y_pred)
-            st.write(f"Model Type: {model_type}")
-            st.write(f"Mean Squared Error: {mse}")
-
-            # Prediction Interface
-            st.subheader("Make Predictions")
-            user_input = {
-                col: st.number_input(
-                    f"Enter {col} value", float(X[col].min()), float(X[col].max())
-                )
-                for col in features
-            }
-            user_input_df = pd.DataFrame([user_input])
-
-            if st.button("Predict"):
-                prediction = model_pipeline.predict(user_input_df)
-                st.write(f"Predicted {target}: {prediction[0]}")
-        else:
-            st.warning("Not enough data for training and testing.")
+        if st.button("Predict"):
+            prediction = model_pipeline.predict(user_input_df)
+            st.write(f"Predicted {target}: {prediction[0]}")
+    else:
+        st.warning("Please select feature columns and a target column.")
 
     # --- Data Filtering ---
     st.header("Data Filtering")
