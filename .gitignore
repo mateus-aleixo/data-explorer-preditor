@@ -39,3 +39,8 @@ Thumbs.db
 *.csv
 *.pkl
 .streamlit/
+
+# Dev Container
+.devcontainer/.env
+.devcontainer/docker-compose.yml.override
+.devcontainer/devcontainer.env
